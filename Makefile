@@ -1,7 +1,7 @@
-CC = cc
+CC = gcc
 CFLAGS = -std=c99 -Wall -g
 LFLAGS = 
-FILES = hello_world prompt doge_code doge_grammar parsing evaluation error_handling s_expressions q_expressions variables functions conditionals strings hand_rolled_parser
+FILES = parsing
 PLATFORM = $(shell uname)
 
 ifeq ($(findstring Linux,$(PLATFORM)),Linux)
