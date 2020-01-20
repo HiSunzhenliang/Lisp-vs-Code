@@ -1,7 +1,11 @@
 //实现一个简单的语法解析器－－波兰表达式/前缀表达式
 
 //#include 'mpc.h'
+
+extern "C" {
 #include <mpc.h>
+}
+
 #include <iostream>
 
 /*申明输入缓冲区*/
@@ -41,8 +45,8 @@ int main() {
         //返回值为 1，失败为 0
         if (mpc_parse("<getline>", input, Lispy, &r)) {
             //成功打印AST 抽象语法树
-            mpc_ast_print(r.output);
-            mpc_ast_delete(r.output);
+            mpc_ast_print((mpc_ast_t*)r.output);
+            mpc_ast_delete((mpc_ast_t*)r.output);
         } else {
             //打印失败信息
             mpc_err_print(r.error);
