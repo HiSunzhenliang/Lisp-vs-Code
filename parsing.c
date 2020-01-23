@@ -9,45 +9,155 @@ static char input[2048];
 enum { LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM };
 
 // lisp value枚举
-enum { LVAL_NUM, LVAL_ERR };
+enum { LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_SEXPR };
 
 // lisp value结构体定义
 typedef struct Lval {
     int type;
     long num;
-    int err;
+    // Error和Symbol有string类型数据
+    char* err;
+    char* sym;
+    //统计列表个数
+    int count;
+    //指向率lval*列表
+    lval** cell;
 } lval;
 
 //创建新数字类型
-lval lval_num(long x) {
-    lval v;
-    v.type = LVAL_NUM;
-    v.num = x;
+lval* lval_num(long x) {
+    lval* v = malloc(sizeof(lval));
+    v->type = LVAL_NUM;
+    v->num = x;
     return v;
 }
 
 //创建新错误类型
-lval lval_err(long x) {
-    lval v;
-    v.type = LVAL_ERR;
-    v.err = x;
+lval* lval_err(char* m) {
+    lval* v = malloc(sizeof(lval));
+    v->type = LVAL_ERR;
+    v->err = malloc(strlen(m) + 1);
+    strcpy(v->err, m);
     return v;
 }
 
-//打印结构体
-void lval_print(lval v) {
-    switch (v.type) {
+//创建新符号类型
+lval* lval_sym(char* s) {
+    lval* v = malloc(sizeof(lval));
+    v->type = LVAL_SYM;
+    v->sym = malloc(strlen(s) + 1);
+    strcpy(v->sym, s);
+    return v;
+}
+
+//创建空s表达式类型
+lval* laval_sexpr(void) {
+    lval* v = malloc(sizeof(lval));
+    v->type = LVAL_SEXPR;
+    v->count = 0;
+    v->cell = NULL;
+    return v;
+}
+
+//释放lval*
+void lval_del(lval* v) {
+    switch (v->type) {
         case LVAL_NUM:
-            printf("%li", v.num);
+            //不改变
             break;
         case LVAL_ERR:
-            if (v.err == LERR_DIV_ZERO) {
+            free(v->err);
+            break;
+        case LVAL_SYM:
+            free(v->sym);
+            break;
+        case LVAL_SEXPR:
+            //释放列表所有
+            for (int i = 0; i < v->count; i++) {
+                lval_del(v->cell[i]);
+            }
+            free(v->cell);
+            break;
+    }
+    free(v);
+}
+
+lval* lval_read_num(mpc_ast_t* t) {
+    errno = 0;
+    long x = strtol(t->contents, NULL, 10);
+    return errno != ERANGE ? lval_num(x) : lval_err("invalid number");
+}
+
+// lval_add，这个函数将表达式的子表达式计数加一
+lval* lval_add(lval* v, lval* x) {
+    v->count++;
+    v->cell = realloc(v->cell, sizeof(lval*) * v->count);
+    v->cell[v->count - 1] = x;
+    return v;
+}
+//象语法树(abstract syntax tree)转换为一个 S-表达式
+lval* lval_read(mpc_ast_t* t) {
+    /* If Symbol or Number return conversion to that type */
+    if (strstr(t->tag, "number")) {
+        return lval_read_num(t);
+    }
+    if (strstr(t->tag, "symbol")) {
+        return lval_sym(t->contents);
+    }
+
+    /* If root (>) or sexpr then create empty list */
+    lval* x = NULL;
+    if (strcmp(t->tag, ">") == 0) {
+        x = lval_sexpr();
+    }
+    if (strstr(t->tag, "sexpr")) {
+        x = lval_sexpr();
+    }
+
+    /* Fill this list with any valid expression contained within */
+    for (int i = 0; i < t->children_num; i++) {
+        if (strcmp(t->children[i]->contents, "(") == 0) {
+            continue;
+        }
+        if (strcmp(t->children[i]->contents, ")") == 0) {
+            continue;
+        }
+        if (strcmp(t->children[i]->tag, "regex") == 0) {
+            continue;
+        }
+        x = lval_add(x, lval_read(t->children[i]));
+    }
+
+    return x;
+}
+
+//打印 S-表达式
+void lval_print(lval* v);
+void lval_expr_print(lval* v, char open, char close) {
+    putchar(open);
+    for (int i = 0; i < v->count; i++) {
+        lval_print(v->cell[i]);
+        if (i != (v->count - 1)) {
+            putchar(' ');
+        }
+    }
+    putchar(close);
+}
+
+//打印结构体
+void lval_print(lval* v) {
+    switch (v->type) {
+        case LVAL_NUM:
+            printf("%li", v->num);
+            break;
+        case LVAL_ERR:
+            if (v->err == LERR_DIV_ZERO) {
                 printf("Error: Division By Zero!");
             }
-            if (v.err == LERR_BAD_OP) {
+            if (v->err == LERR_BAD_OP) {
                 printf("Error: Invalid Operato!");
             }
-            if (v.err == LERR_BAD_NUM) {
+            if (v->err == LERR_BAD_NUM) {
                 printf("Error: Invalid Number!");
             }
             break;
@@ -106,19 +216,21 @@ lval eval(mpc_ast_t* t) {
 int main() {
     //创建解析器
     mpc_parser_t* Number = mpc_new("number");
-    mpc_parser_t* Operator = mpc_new("operator");
+    mpc_parser_t* Symbol = mpc_new("symbol");
+    mpc_parser_t* Sexpr = mpc_new("sexpr");
     mpc_parser_t* Expr = mpc_new("expr");
     mpc_parser_t* Lispy = mpc_new("lispy");
 
-    //定义解析器,语法规则
+    //定义解析器的语法规则
     mpca_lang(MPCA_LANG_DEFAULT,
               "                                    \
       number   : /-?[0-9]+/;                       \
-      operator : '+'|'-'|'*'|'/';                  \
+      symbol   : '+'|'-'|'*'|'/';                  \
+      expr     : '('<expr>*')'                     \
       expr     : <number>|'('<operator><expr>+')'; \
       lispy    : /^/ <operator><expr>+  /$/;       \
     ",
-              Number, Operator, Expr, Lispy);
+              Number, Symbol, Sexpr, Expr, Lispy);
 
     /*打印版本和退出信息*/
     puts("Lispy Version 0.0.0.0.2");
@@ -153,7 +265,7 @@ int main() {
     }
 
     //清除解析器
-    mpc_cleanup(4, Number, Operator, Expr, Lispy);
+    mpc_cleanup(5, Number, Symbol, Sexpr, Expr, Lispy);
     return 0;
 }
 
