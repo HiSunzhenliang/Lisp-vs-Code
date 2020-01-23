@@ -5,14 +5,14 @@
 /*申明输入缓冲区*/
 static char input[2048];
 
-//错误情况枚举
-enum { LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM };
+// //错误情况枚举
+// enum { LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM };
 
 // lisp value枚举
 enum { LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_SEXPR };
 
 // lisp value结构体定义
-typedef struct Lval {
+typedef struct lval {
     int type;
     long num;
     // Error和Symbol有string类型数据
@@ -21,7 +21,7 @@ typedef struct Lval {
     //统计列表个数
     int count;
     //指向率lval*列表
-    lval** cell;
+    struct lval** cell;
 } lval;
 
 //创建新数字类型
@@ -51,7 +51,7 @@ lval* lval_sym(char* s) {
 }
 
 //创建空s表达式类型
-lval* laval_sexpr(void) {
+lval* lval_sexpr(void) {
     lval* v = malloc(sizeof(lval));
     v->type = LVAL_SEXPR;
     v->count = 0;
@@ -82,12 +82,6 @@ void lval_del(lval* v) {
     free(v);
 }
 
-lval* lval_read_num(mpc_ast_t* t) {
-    errno = 0;
-    long x = strtol(t->contents, NULL, 10);
-    return errno != ERANGE ? lval_num(x) : lval_err("invalid number");
-}
-
 // lval_add，这个函数将表达式的子表达式计数加一
 lval* lval_add(lval* v, lval* x) {
     v->count++;
@@ -95,7 +89,167 @@ lval* lval_add(lval* v, lval* x) {
     v->cell[v->count - 1] = x;
     return v;
 }
-//象语法树(abstract syntax tree)转换为一个 S-表达式
+
+// lval_pop 函数将所操作的 S-表达式的第 i
+// 个元素取出，并将在其后面的元素向前移动填补空缺，使得这个
+// S-表达式不再包含这个元素。然后将取出的元素返回。
+lval* lval_pop(lval* v, int i) {
+    //列表中寻找元素i
+    lval* x = v->cell[i];
+    //平移内存中i之后的元素
+    memmove(&v->cell[i], &v->cell[i + 1], sizeof(lval*) * (v->count - i - 1));
+    //减少count
+    v->count--;
+    //重新分配列表内存容量
+    v->cell = realloc(v->cell, sizeof(lval*) * v->count);
+    return x;
+}
+
+//它将取出元素之后剩下的列表删除
+lval* lval_take(lval* v, int i) {
+    lval* x = lval_pop(v, i);
+    lval_del(v);
+    return x;
+}
+
+//打印 S-表达式
+void lval_print(lval* v);
+void lval_expr_print(lval* v, char open, char close) {
+    putchar(open);
+    for (int i = 0; i < v->count; i++) {
+        lval_print(v->cell[i]);
+        if (i != (v->count - 1)) {
+            putchar(' ');
+        }
+    }
+    putchar(close);
+}
+
+//打印结构体
+void lval_print(lval* v) {
+    switch (v->type) {
+        case LVAL_NUM:
+            printf("%li", v->num);
+            break;
+        case LVAL_ERR:
+            printf("Error: %s", v->err);
+            break;
+        case LVAL_SYM:
+            printf("%s", v->sym);
+            break;
+        case LVAL_SEXPR:
+            lval_expr_print(v, '(', ')');
+            break;
+    }
+    printf("\n");
+}
+
+//求值函数
+lval* buillin_op(lval* a, char* op) {
+    //确保输入参数类型都为数字
+    for (int i = 0; i < a->count; i++) {
+        if (a->cell[i]->type != LVAL_NUM) {
+            lval_del(a);
+            return lval_err("Cannot operate on non-number!");
+        }
+    }
+    //弹出第一个元素进行判断
+    lval* x = lval_pop(a, 0);
+    //操作符为‘-’且只有一个元素,取反
+    if (strcmp(op, "-") == 0 && a->count == 0) {
+        x->num = -x->num;
+    }
+    /*如果还有更多的参数，它就不断地从列表中取出，
+    将其和之前的计算结果一起进行相应的数学运算。如果
+    做除法时遇到被除数为零的情况，就将临时变量
+    x 和 y 以及参数列表删除，并返回一个错误。
+    如果没有错误，参数列表最终会被删除，并返回一个新的表达式。*/
+    while (a->count > 0) {  // pop下一个元素
+        lval* y = lval_pop(a, 0);
+
+        if (strcmp(op, "+") == 0) {
+            return lval_num(x->num + y->num);
+        }
+        if (strcmp(op, "-") == 0) {
+            return lval_num(x->num - y->num);
+        }
+        if (strcmp(op, "*") == 0) {
+            return lval_num(x->num * y->num);
+        }
+        if (strcmp(op, "/") == 0) {
+            if (y->num == 0) {
+                lval_del(x);
+                lval_del(y);
+                x = lval_err("Division By Zero!");
+                break;
+            }
+            x->num /= y->num;
+        }
+        lval_del(y);
+    }
+    lval_del(a);
+    return x;
+}
+
+lval* lval_eval(lval* v);
+// lval* lval_pop(lval* v, int i);
+// lval* lval_take(lval* v, int i);
+lval* buillin_op(lval* a, char* op);
+
+// s-表达式求值，lval* 作为输入，通过某种方式将其转化为新的 lval* 并输出
+lval* lval_eval_sexpr(lval* v) {
+    //计算孩子节点
+    for (int i = 0; i < v->count; i++) {
+        v->cell[i] = lval_eval(v->cell[i]);
+    }
+
+    //错误检查
+    for (int i = 0; i < v->count; i++) {
+        if (v->cell[i]->type == LVAL_ERR) {
+            return lval_take(v, i);
+        }
+    }
+
+    //空表达式
+    if (v->count == 0) {
+        return v;
+    }
+
+    //单表达式
+    if (v->count == 1) {
+        return lval_take(v, 0);
+    }
+
+    //确保第一个元素是符号,非符号则报错
+    lval* f = lval_pop(v, 0);
+    if (f->type != LVAL_SYM) {
+        lval_del(f);
+        lval_del(v);
+        return lval_err("S-expression Does not start with symbol!");
+    }
+
+    //调用 buildin with operator
+    lval* result = buillin_op(v, f->sym);
+    lval_del(f);
+    return result;
+}
+
+//计算s-表达式
+lval* lval_eval(lval* v) {
+    if (v->type == LVAL_SEXPR) {
+        return lval_eval_sexpr(v);
+    }
+    //其他lval类型保持不变
+    return v;
+}
+
+lval* lval_read_num(mpc_ast_t* t) {
+    errno = 0;
+    long x = strtol(t->contents, NULL, 10);
+    return errno != ERANGE ? lval_num(x) : lval_err("invalid number");
+}
+
+//将语法树(abstract syntax tree)转换为一个 S-表达式
 lval* lval_read(mpc_ast_t* t) {
     /* If Symbol or Number return conversion to that type */
     if (strstr(t->tag, "number")) {
@@ -131,89 +285,57 @@ lval* lval_read(mpc_ast_t* t) {
     return x;
 }
 
-//打印 S-表达式
-void lval_print(lval* v);
-void lval_expr_print(lval* v, char open, char close) {
-    putchar(open);
-    for (int i = 0; i < v->count; i++) {
-        lval_print(v->cell[i]);
-        if (i != (v->count - 1)) {
-            putchar(' ');
-        }
-    }
-    putchar(close);
-}
+// //判断计算符号
+// lval eval_op(lval x, char* op, lval y) {
+//     //如果x、y有值为ERR,则return它
+//     if (x.type == LVAL_ERR) {
+//         return x;
+//     }
+//     if (y.type == LVAL_ERR) {
+//         return y;
+//     }
+//     if (strcmp(op, "+") == 0) {
+//         return lval_num(x.num + y.num);
+//     }
+//     if (strcmp(op, "-") == 0) {
+//         return lval_num(x.num - y.num);
+//     }
+//     if (strcmp(op, "*") == 0) {
+//         return lval_num(x.num * y.num);
+//     }
+//     if (strcmp(op, "/") == 0) {
+//         return y.num == 0 ? lval_err(LERR_DIV_ZERO) : lval_num(x.num /
+//         y.num);
+//     }
+//     return lval_err(LERR_BAD_OP);
+// }
 
-//打印结构体
-void lval_print(lval* v) {
-    switch (v->type) {
-        case LVAL_NUM:
-            printf("%li", v->num);
-            break;
-        case LVAL_ERR:
-            if (v->err == LERR_DIV_ZERO) {
-                printf("Error: Division By Zero!");
-            }
-            if (v->err == LERR_BAD_OP) {
-                printf("Error: Invalid Operato!");
-            }
-            if (v->err == LERR_BAD_NUM) {
-                printf("Error: Invalid Number!");
-            }
-            break;
-    }
-    printf("\n");
-}
-
-//判断计算符号
-lval eval_op(lval x, char* op, lval y) {
-    //如果x、y有值为ERR,则return它
-    if (x.type == LVAL_ERR) {
-        return x;
-    }
-    if (y.type == LVAL_ERR) {
-        return y;
-    }
-    if (strcmp(op, "+") == 0) {
-        return lval_num(x.num + y.num);
-    }
-    if (strcmp(op, "-") == 0) {
-        return lval_num(x.num - y.num);
-    }
-    if (strcmp(op, "*") == 0) {
-        return lval_num(x.num * y.num);
-    }
-    if (strcmp(op, "/") == 0) {
-        return y.num == 0 ? lval_err(LERR_DIV_ZERO) : lval_num(x.num / y.num);
-    }
-    return lval_err(LERR_BAD_OP);
-}
-
-//递归求值函数
-lval eval(mpc_ast_t* t) {
-    //如果是叶子为数字
-    if (strstr(t->tag, "number")) {
-        //返回前先转换，转换后判断转换是否出错
-        errno = 0;  // erro记录代码错误的int值
-        long x = strtol(t->contents, NULL, 10);
-        return errno != ERANGE
-                   ? lval_num(x)
-                   : lval_err(LERR_BAD_NUM);  // ERANGE为数学结果无法表示
-    }
-    //第二个孩子为操作符
-    char* op = t->children[1]->contents;
-    //将第三个孩子值存入x,递归
-    lval x = eval(t->children[2]);
-    //遍历剩下孩子
-    int i = 3;
-    while (strstr(t->children[i]->tag, "expr")) {
-        x = eval_op(x, op, eval(t->children[i]));
-        i++;
-    }
-    return x;
-}
+// //递归求值函数
+// lval eval(mpc_ast_t* t) {
+//     //如果是叶子为数字
+//     if (strstr(t->tag, "number")) {
+//         //返回前先转换，转换后判断转换是否出错
+//         errno = 0;  // erro记录代码错误的int值
+//         long x = strtol(t->contents, NULL, 10);
+//         return errno != ERANGE
+//                    ? lval_num(x)
+//                    : lval_err(LERR_BAD_NUM);  // ERANGE为数学结果无法表示
+//     }
+//     //第二个孩子为操作符
+//     char* op = t->children[1]->contents;
+//     //将第三个孩子值存入x,递归
+//     lval x = eval(t->children[2]);
+//     //遍历剩下孩子
+//     int i = 3;
+//     while (strstr(t->children[i]->tag, "expr")) {
+//         x = eval_op(x, op, eval(t->children[i]));
+//         i++;
+//     }
+//     return x;
+// }
 
 int main() {
+    puts("++++++++++++++++++++++++++++++++++++\n");
     //创建解析器
     mpc_parser_t* Number = mpc_new("number");
     mpc_parser_t* Symbol = mpc_new("symbol");
@@ -221,19 +343,21 @@ int main() {
     mpc_parser_t* Expr = mpc_new("expr");
     mpc_parser_t* Lispy = mpc_new("lispy");
 
+    puts("++++++++++++++++++++++++++++++++++++\n");
+
     //定义解析器的语法规则
     mpca_lang(MPCA_LANG_DEFAULT,
               "                                    \
       number   : /-?[0-9]+/;                       \
       symbol   : '+'|'-'|'*'|'/';                  \
-      expr     : '('<expr>*')'                     \
-      expr     : <number>|'('<operator><expr>+')'; \
-      lispy    : /^/ <operator><expr>+  /$/;       \
+      sexpr     : '(' <expr>* ')' ;                \
+      expr     : <number> | <symbol> | <sexpr>;  \
+      lispy    : /^/ <expr>*  /$/;                 \
     ",
               Number, Symbol, Sexpr, Expr, Lispy);
-
+    puts("++++++++++++++++++++++++++++++++++++\n");
     /*打印版本和退出信息*/
-    puts("Lispy Version 0.0.0.0.2");
+    puts("Lispy Version 0.0.0.0.5");
     puts("Press Ctrl+c to Exit\n");
 
     //死循环
@@ -252,9 +376,13 @@ int main() {
             // //成功打印AST 抽象语法树
             // mpc_ast_print(r.output);
 
-            lval result = eval(r.output);
-            // printf("%li\n", result);
-            lval_print(result);
+            // lval result = eval(r.output);
+            // // printf("%li\n", result);
+            // lval_print(result);
+
+            lval* x = lval_eval(lval_read(r.output));
+            lval_print(x);
+            lval_del(x);
 
             mpc_ast_delete(r.output);
         } else {

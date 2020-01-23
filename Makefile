@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -std=c99 -Wall -g
 LFLAGS = 
-FILES = parsing
+FILES = parsing s_expressions
 PLATFORM = $(shell uname)
 
 ifeq ($(findstring Linux,$(PLATFORM)),Linux)
