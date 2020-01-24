@@ -9,7 +9,7 @@ static char input[2048];
 // enum { LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM };
 
 // lisp value枚举
-enum { LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_SEXPR };
+enum { LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_SEXPR, LVAL_QEXPR };
 
 // lisp value结构体定义
 typedef struct lval {
@@ -59,6 +59,15 @@ lval* lval_sexpr(void) {
     return v;
 }
 
+//创建Q-表达式
+lval* lval_qexpr(void) {
+    lval* v = malloc(sizeof(lval));
+    v->type = LVAL_QEXPR;
+    v->count = 0;
+    v->cell = NULL;
+    return v;
+}
+
 //释放lval*
 void lval_del(lval* v) {
     switch (v->type) {
@@ -71,6 +80,7 @@ void lval_del(lval* v) {
         case LVAL_SYM:
             free(v->sym);
             break;
+        case LVAL_QEXPR:
         case LVAL_SEXPR:
             //释放列表所有
             for (int i = 0; i < v->count; i++) {
@@ -105,6 +115,15 @@ lval* lval_pop(lval* v, int i) {
     return x;
 }
 
+lval* lval_join(lval* x, lval* y) {
+    //每个cell列表，y转移到中
+    while (y->count) {
+        x = lval_add(x, lval_pop(y, 0));
+    }
+    //删除空y，返回x
+    lval_del(y);
+    return x;
+}
 //它将取出元素之后剩下的列表删除
 lval* lval_take(lval* v, int i) {
     lval* x = lval_pop(v, i);
@@ -125,7 +144,7 @@ void lval_expr_print(lval* v, char open, char close) {
     putchar(close);
 }
 
-//打印结构体
+//打印结构体，非换行打印
 void lval_print(lval* v) {
     switch (v->type) {
         case LVAL_NUM:
@@ -140,12 +159,115 @@ void lval_print(lval* v) {
         case LVAL_SEXPR:
             lval_expr_print(v, '(', ')');
             break;
+        case LVAL_QEXPR:
+            lval_expr_print(v, '{', '}');
+            break;
     }
-    printf("\n");
+}
+//换行打印
+void lval_println(lval* v) {
+    lval_print(v);
+    putchar('\n');
+}
+
+lval* lval_eval(lval* v);
+
+// list 接收一个或者多个参数，返回一个包含所有参数的Q-表达式
+lval* builtin_list(lval* a) {
+    a->type = LVAL_QEXPR;
+    return a;
+}
+
+// Q-表达式操作符 head接受一个Q-表达式，返回一个包含其第一个元素的Q-表达式
+lval* builtin_head(lval* a) {
+    //检查错误情况
+    //参数不唯一
+    if (a->count != 1) {
+        lval_del(a);
+        return lval_err("Function 'head' passed too many arguments!");
+    }
+    //传入参数不是Q-表达式
+    if (a->cell[0]->type != LVAL_QEXPR) {
+        lval_del(a);
+        return lval_err("Function 'head' passed incorrect types!");
+    }
+    // Q空值传入
+    if (a->cell[0]->count == 0) {
+        lval_del(a);
+        return lval_err("Function 'head' passed {}!");
+    }
+    //取出首元素
+    lval* v = lval_take(a, 0);
+    //删除剩余元素
+    while (v->count > 1) {
+        lval_del(lval_pop(v, 1));
+    }
+    return v;
+}
+
+// tail 接受一个Q-表达式，返回一个除首元素外的Q-表达式
+lval* builtin_tail(lval* a) {
+    //检查错误情况
+    //参数不唯一
+    if (a->count != 1) {
+        lval_del(a);
+        return lval_err("Function 'head' passed too many arguments!");
+    }
+    //传入参数不是Q-表达式
+    if (a->cell[0]->type != LVAL_QEXPR) {
+        lval_del(a);
+        return lval_err("Function 'head' passed incorrect types!");
+    }
+    // Q空值传入
+    if (a->cell[0]->count == 0) {
+        lval_del(a);
+        return lval_err("Function 'head' passed {}!");
+    }
+    //取出首元素
+    lval* v = lval_take(a, 0);
+    //删除首元素
+    lval_del(lval_pop(v, 0));
+
+    return v;
+}
+
+// eval 接受一个Q-表达式，将其看做一个S-表达式，并运行
+lval* builtin_eval(lval* a) {
+    //参数不唯一
+    if (a->count != 1) {
+        lval_del(a);
+        return lval_err("Function 'head' passed too many arguments!");
+    }
+    //传入参数不是Q-表达式
+    if (a->cell[0]->type != LVAL_QEXPR) {
+        lval_del(a);
+        return lval_err("Function 'head' passed incorrect types!");
+    }
+
+    lval* x = lval_take(a, 0);
+    x->type = LVAL_SEXPR;
+    return lval_eval(x);
+}
+
+// join 接受一个或者多个Q-表达式，返回一个将其连在一起的Q-表达式
+lval* lval_join(lval* x, lval* y);
+lval* builtin_join(lval* a) {
+    //传入参数不是Q-表达式
+    if (a->cell[0]->type != LVAL_QEXPR) {
+        lval_del(a);
+        return lval_err("Function 'head' passed incorrect types!");
+    }
+    //将y中元素依次弹出并添加进x中，然后将y删除，返回x。
+    lval* x = lval_pop(a, 0);
+    while (a->count) {
+        x = lval_join(x, lval_pop(a, 0));
+    }
+    lval_del(a);
+    return x;
 }
 
 //求值函数
-lval* buillin_op(lval* a, char* op) {
+lval* builtin_op(lval* a, char* op) {
     //确保输入参数类型都为数字
     for (int i = 0; i < a->count; i++) {
         if (a->cell[i]->type != LVAL_NUM) {
@@ -191,10 +313,29 @@ lval* buillin_op(lval* a, char* op) {
     return x;
 }
 
-lval* lval_eval(lval* v);
-// lval* lval_pop(lval* v, int i);
-// lval* lval_take(lval* v, int i);
-lval* buillin_op(lval* a, char* op);
+//索引调用symbol方法
+lval* builtin(lval* a, char* func) {
+    if (strcmp("list", func) == 0) {
+        return builtin_list(a);
+    }
+    if (strcmp("head", func) == 0) {
+        return builtin_head(a);
+    }
+    if (strcmp("tail", func) == 0) {
+        return builtin_tail(a);
+    }
+    if (strcmp("join", func) == 0) {
+        return builtin_join(a);
+    }
+    if (strcmp("eval", func) == 0) {
+        return builtin_eval(a);
+    }
+    if (strstr("+-/*", func)) {
+        return builtin_op(a, func);
+    }
+    lval_del(a);
+    return lval_err("Unkonwn Function!");
+}
 
 // s-表达式求值，lval* 作为输入，通过某种方式将其转化为新的 lval* 并输出
 lval* lval_eval_sexpr(lval* v) {
@@ -229,7 +370,7 @@ lval* lval_eval_sexpr(lval* v) {
     }
 
     //调用 buildin with operator
-    lval* result = buillin_op(v, f->sym);
+    lval* result = builtin(v, f->sym);
     lval_del(f);
     return result;
 }
@@ -267,6 +408,9 @@ lval* lval_read(mpc_ast_t* t) {
     if (strstr(t->tag, "sexpr")) {
         x = lval_sexpr();
     }
+    if (strstr(t->tag, "qexpr")) {
+        x = lval_qexpr();
+    }
 
     /* Fill this list with any valid expression contained within */
     for (int i = 0; i < t->children_num; i++) {
@@ -274,6 +418,12 @@ lval* lval_read(mpc_ast_t* t) {
             continue;
         }
         if (strcmp(t->children[i]->contents, ")") == 0) {
+            continue;
+        }
+        if (strcmp(t->children[i]->contents, "}") == 0) {
+            continue;
+        }
+        if (strcmp(t->children[i]->contents, "{") == 0) {
             continue;
         }
         if (strcmp(t->children[i]->tag, "regex") == 0) {
@@ -340,22 +490,25 @@ int main() {
     mpc_parser_t* Number = mpc_new("number");
     mpc_parser_t* Symbol = mpc_new("symbol");
     mpc_parser_t* Sexpr = mpc_new("sexpr");
+    mpc_parser_t* Qexpr = mpc_new("qexpr");
     mpc_parser_t* Expr = mpc_new("expr");
     mpc_parser_t* Lispy = mpc_new("lispy");
 
-    puts("++++++++++++++++++++++++++++++++++++\n");
+    // puts("++++++++++++++++++++++++++++++++++++\n");
 
     //定义解析器的语法规则
     mpca_lang(MPCA_LANG_DEFAULT,
-              "                                    \
-      number   : /-?[0-9]+/;                       \
-      symbol   : '+'|'-'|'*'|'/';                  \
-      sexpr     : '(' <expr>* ')' ;                \
-      expr     : <number> | <symbol> | <sexpr>;  \
-      lispy    : /^/ <expr>*  /$/;                 \
+              "                                            \
+      number   : /-?[0-9]+/;                               \
+      symbol   : \"list\"|\" head \"|\" tail \"            \
+               |\" join \"|\" eval \"|'+'|'-'|'*'|'/';     \
+      sexpr    : '(' <expr>* ')' ;                         \
+      qexpr    : '{' <expr>* '}' ;                         \
+      expr     : <number> | <symbol> | <sexpr> | <qexpr>;  \
+      lispy    : /^/ <expr>*  /$/;                         \
     ",
-              Number, Symbol, Sexpr, Expr, Lispy);
-    puts("++++++++++++++++++++++++++++++++++++\n");
+              Number, Symbol, Sexpr, Qexpr, Expr, Lispy);
+    // puts("++++++++++++++++++++++++++++++++++++\n");
     /*打印版本和退出信息*/
     puts("Lispy Version 0.0.0.0.5");
     puts("Press Ctrl+c to Exit\n");
@@ -381,7 +534,7 @@ int main() {
             // lval_print(result);
 
             lval* x = lval_eval(lval_read(r.output));
-            lval_print(x);
+            lval_println(x);
             lval_del(x);
 
             mpc_ast_delete(r.output);
@@ -393,10 +546,10 @@ int main() {
     }
 
     //清除解析器
-    mpc_cleanup(5, Number, Symbol, Sexpr, Expr, Lispy);
+    mpc_cleanup(5, Number, Symbol, Sexpr, Qexpr, Expr, Lispy);
     return 0;
 }
 
 /*
-gcc -std=c99 -Wall parsing.c mpc.c -o parsing  -lm
+gcc -std=c99 -Wall parsing.c mpc.c -o parsing
 */
