@@ -485,7 +485,7 @@ lval* lval_read(mpc_ast_t* t) {
 // }
 
 int main() {
-    puts("++++++++++++++++++++++++++++++++++++\n");
+    puts("++++++++++++++++++++++++++++++++++++");
     //创建解析器
     mpc_parser_t* Number = mpc_new("number");
     mpc_parser_t* Symbol = mpc_new("symbol");
