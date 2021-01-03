@@ -1,3 +1,6 @@
+`sudo apt-get install libedit-dev  `
+
+
 ### 交互 `REPL`
 
 - `read-evaluate-print loop` （读取 - 求值 - 输出循环）这种模式下的程序读取用户的输入，在程序内部进行处理，然后返回一些信息给用户。这种系统也被叫做 REPL

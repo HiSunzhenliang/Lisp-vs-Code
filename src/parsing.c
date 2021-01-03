@@ -1,6 +1,6 @@
 //实现一个简单的语法解析器－－波兰表达式/前缀表达式
 
-#include <mpc.h>
+#include "mpc.h"
 
 /*申明输入缓冲区*/
 static char input[2048];
